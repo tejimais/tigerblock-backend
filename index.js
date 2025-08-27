@@ -38,7 +38,7 @@ app.use(bodyParser.json());
 // PostgreSQL: conexão Railway interna (sem SSL)
 // =======================
 const pool = new Pool({
-  connectionString: process.env.POSTGRES_URL
+  connectionString: process.env.DATABASE_URL
 });
 
 // =======================
