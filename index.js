@@ -1,9 +1,8 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const bodyParser = require('body-parser');
-const { verifyMessage } = require('ethers');
+const { verifyMessage } = require('ethers'); // ethers v6
 
 const app = express();
 const port = process.env.PORT || 4000;
@@ -15,14 +14,15 @@ const allowedOrigins = [
   'https://api.chaigergame.com',
   'https://chaigergame.com',
   'https://www.chaigergame.com',
-  'https://chaiger.xyz',
   'https://www.chaiger.xyz',
+  'https://chaiger.xyz',
   'http://localhost:3000'
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
-    if (!origin || allowedOrigins.includes(origin.trim())) return callback(null, true);
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.includes(origin)) return callback(null, true);
     return callback(new Error('CORS: Origem não permitida'));
   },
   credentials: true,
@@ -35,32 +35,29 @@ app.use(cors({
 app.use(bodyParser.json());
 
 // =======================
-// PostgreSQL: conexão Railway interna (sem SSL)
+// Banco de Dados SQLite
 // =======================
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
+  connectionString: process.env.DATABASE_URL, // configure isso no Railway
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
 
-// =======================
-// Criação da Tabela
-// =======================
+// Criar tabela, se não existir
 pool.query(`
   CREATE TABLE IF NOT EXISTS user_state (
     wallet TEXT PRIMARY KEY,
     credits NUMERIC DEFAULT 0,
     pendingTBT TEXT DEFAULT '0'
-  )
-`).then(() => {
-  console.log("✅ Tabela 'user_state' pronta.");
-}).catch(err => {
-  console.error("❌ Erro ao criar/verificar tabela:", err);
-});
+  );
+`).catch(err => console.error('❌ Erro ao criar tabela:', err));
 
 // =======================
 // Teste de Conexão
 // =======================
 app.get('/', (req, res) => {
-  res.json({ status: 'online', message: 'API Tigerblock rodando dentro da Railway!' });
+  res.json({ status: 'online', message: 'API Tigerblock Epa com HTTPS!' });
 });
 
 // =======================
@@ -68,11 +65,14 @@ app.get('/', (req, res) => {
 // =======================
 app.get('/api/user/:wallet', async (req, res) => {
   const { wallet } = req.params;
+
   try {
     const result = await pool.query('SELECT * FROM user_state WHERE wallet = $1', [wallet]);
-    if (result.rowCount === 0) {
+
+    if (result.rows.length === 0) {
       return res.status(404).json({ wallet, credits: 0, pendingTBT: '0' });
     }
+
     res.json(result.rows[0]);
   } catch (err) {
     console.error('❌ Erro ao buscar dados:', err.message);
@@ -84,45 +84,43 @@ app.get('/api/user/:wallet', async (req, res) => {
 // POST - Salvar/Atualizar Dados
 // =======================
 app.post('/api/user/save', async (req, res) => {
-  let { wallet, credits, pendingTBT, signature } = req.body;
+  const { wallet, credits, pendingTBT, signature } = req.body;
 
-  console.log('\n📥 Requisição recebida:', { wallet, credits, pendingTBT, signature });
+  console.log('\n📥 Requisição recebida:');
+  console.log('→ Wallet:', wallet);
+  console.log('→ Credits:', credits);
+  console.log('→ PendingTBT:', pendingTBT);
+  console.log('→ Signature:', signature);
+  console.log('→ Mensagem para verificar:', `Update request for wallet: ${wallet}`);
 
-  if (!wallet || typeof wallet !== 'string') {
-    return res.status(400).json({ error: 'Wallet inválida ou ausente' });
+  if (!wallet || !signature) {
+    return res.status(400).json({ error: 'Carteira e assinatura obrigatórias' });
   }
 
-  credits = Number(credits);
-  if (isNaN(credits)) {
-    return res.status(400).json({ error: 'Credits deve ser um número válido' });
+  const message = `Update request for wallet: ${wallet}`;
+
+  let recovered;
+  try {
+    recovered = verifyMessage(message, signature);
+  } catch (err) {
+    console.error('❌ Erro ao verificar assinatura:', err.message);
+    return res.status(401).json({ error: 'Assinatura inválida' });
   }
 
-  if (!pendingTBT || typeof pendingTBT !== 'string') {
-    pendingTBT = '0';
-  }
-
-  if (signature && typeof signature === 'string') {
-    const message = `Update request for wallet: ${wallet}`;
-    try {
-      const recovered = verifyMessage(message, signature);
-      if (recovered.toLowerCase() !== wallet.toLowerCase()) {
-        return res.status(401).json({ error: 'Assinatura não corresponde à carteira' });
-      }
-    } catch (err) {
-      console.error('❌ Erro ao verificar assinatura:', err.message);
-      return res.status(401).json({ error: 'Assinatura inválida' });
-    }
+  if (recovered.toLowerCase() !== wallet.toLowerCase()) {
+    console.warn('🚨 Assinatura não corresponde à carteira!');
+    return res.status(401).json({ error: 'Assinatura não corresponde à carteira' });
   }
 
   try {
-    await pool.query(
-      `INSERT INTO user_state (wallet, credits, pendingTBT)
-       VALUES ($1, $2, $3)
-       ON CONFLICT(wallet) DO UPDATE
-       SET credits = EXCLUDED.credits,
-           pendingTBT = EXCLUDED.pendingTBT`,
-      [wallet, credits, pendingTBT]
-    );
+    await pool.query(`
+      INSERT INTO user_state (wallet, credits, pendingTBT)
+      VALUES ($1, $2, $3)
+      ON CONFLICT(wallet) DO UPDATE SET
+        credits = excluded.credits,
+        pendingTBT = excluded.pendingTBT
+    `, [wallet, credits, pendingTBT]);
+
     res.json({ success: true });
   } catch (err) {
     console.error('❌ Erro ao salvar no banco de dados:', err.message);
@@ -134,5 +132,5 @@ app.post('/api/user/save', async (req, res) => {
 // Iniciar servidor
 // =======================
 app.listen(port, () => {
-  console.log(`🚀 API Tigerblock online na porta ${port} (Railway)`);  
+  console.log(`🚀 API rodando na porta ${port}`);
 });
