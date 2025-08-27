@@ -53,7 +53,7 @@ pool.query(`
 `).then(() => {
   console.log("✅ Tabela 'user_state' pronta.");
 }).catch(err => {
-  console.error("❌ Erro ao criar/verificar tabela:", err.message);
+  console.error("❌ Erro ao criar/verificar tabela:", err);
 });
 
 // =======================
